@@ -10,7 +10,7 @@ Windows curl
   -> 内部 Nginx :1080（流式反向代理）
   -> HTTPS 117.139.126.166:10443
   -> Go 文件上传 API
-  -> /data/uploads/.tmp -> /data/uploads/<filename>
+  -> /data/upload-tmp/<request-id>-*.tmp -> /data/uploads/<filename>
 ```
 
 Windows 到 Nginx 之间使用 HTTP。Nginx 在 HTTPS 链路上使用私有 CA 验证文件上传 API 的证书。API 始终使用固定的 Bearer 令牌进行身份认证。
@@ -51,6 +51,7 @@ git push origin v1.0.0
 |---|---:|---|
 | `LISTEN_ADDR` | `:10443` | HTTPS 监听地址 |
 | `STORAGE_DIR` | `/data/uploads` | 最终文件存储目录 |
+| `TMP_DIR` | `/data/upload-tmp` | 上传中的临时文件目录 |
 | `MAX_FILE_SIZE` | `21474836480` | 最大文件大小，单位为字节（20 GiB） |
 | `MAX_CONCURRENT_UPLOADS` | `1` | 可立即处理的上传数量；管理员可显式配置更大的值 |
 | `MIN_FREE_SPACE` | `1073741824` | 上传后必须保留的可用空间字节数 |
@@ -60,7 +61,7 @@ git push origin v1.0.0
 | `TLS_CERT_FILE` | `/etc/upload-api/tls/server.crt` | 服务端证书文件 |
 | `TLS_KEY_FILE` | `/etc/upload-api/tls/server.key` | 服务端私钥文件 |
 
-服务启动时会校验所有配置值和两个 TLS 文件。服务会创建存储目录及其 `.tmp` 子目录，并检查临时文件写入和硬链接发布能力。服务拒绝长度未知或使用 chunked 编码的请求体。
+服务启动时会校验所有配置值和两个 TLS 文件。服务会分别创建 `STORAGE_DIR` 和 `TMP_DIR`，确认两者是同一文件系统上的不同目录，并检查临时文件写入和硬链接发布能力。V1 使用 hard link 原子发布已完成文件，因此目录相同或跨文件系统时服务会启动失败。服务拒绝长度未知或使用 chunked 编码的请求体。
 
 ## 准备 TLS 证书
 
@@ -78,6 +79,7 @@ git push origin v1.0.0
 ./scripts/generate-dev-certs.sh 127.0.0.1 ./certs
 export UPLOAD_TOKEN="$(openssl rand -hex 32)"
 export STORAGE_DIR=/tmp/upload-api-data
+export TMP_DIR=/tmp/upload-api-tmp
 export MIN_FREE_SPACE=0
 export TLS_CERT_FILE="$PWD/certs/server.crt"
 export TLS_KEY_FILE="$PWD/certs/server.key"
@@ -104,11 +106,20 @@ curl --cacert ./certs/upload-ca.crt -fS -T /tmp/hello.txt \
 
 ```bash
 useradd --system --home /var/lib/upload-api --shell /usr/sbin/nologin upload
-mkdir -p /var/lib/upload-api /data/uploads/.tmp /etc/upload-api/tls
-chown -R upload:upload /var/lib/upload-api /data/uploads
+mkdir -p /var/lib/upload-api /data/uploads /data/upload-tmp /etc/upload-api/tls
+chown -R upload:upload /var/lib/upload-api /data/uploads /data/upload-tmp
 chown root:upload /etc/upload-api /etc/upload-api/tls
-chmod 750 /etc/upload-api /etc/upload-api/tls /data/uploads /data/uploads/.tmp
+chmod 750 /etc/upload-api /etc/upload-api/tls /data/uploads /data/upload-tmp
 ```
+
+`STORAGE_DIR=/data/uploads` 保存最终完成文件，`TMP_DIR=/data/upload-tmp` 保存上传中的临时文件。两者必须是同一个文件系统上的不同目录。例如以下命令显示的设备号应相同：
+
+```bash
+df -T /data/uploads /data/upload-tmp
+stat -c '%d %n' /data/uploads /data/upload-tmp
+```
+
+`/data/uploads` 与 `/data/upload-tmp` 在同一文件系统上是正确配置；如果 `/data/uploads` 与 `/mnt/other-disk/upload-tmp` 属于不同文件系统，则是错误配置，服务将拒绝启动。
 
 将二进制文件复制到 `/usr/local/bin/upload-api`，将示例环境变量文件复制到 `/etc/upload-api/upload-api.env`，将 TLS 文件复制到 `/etc/upload-api/tls`，并将 systemd 单元文件复制到 `/etc/systemd/system/upload-api.service`。环境变量文件的所有者和权限应设置为 `root:upload`、`0640`；私钥也应设置为 `root:upload`、`0640`。然后执行：
 
@@ -156,7 +167,7 @@ curl.exe -fS -T "C:\data\project-data.zip" `
 
 ## 存储、清理与令牌轮换
 
-只有完整上传的文件才会直接出现在 `STORAGE_DIR` 下。进行中的上传使用 `STORAGE_DIR/.tmp/*.tmp`；上传失败时会删除对应临时文件。服务会在启动时和此后每小时清理早于 `TEMP_FILE_TTL` 的临时文件。服务绝不会清理最终文件，也不会覆盖同名文件。
+只有完整上传的文件才会直接出现在 `STORAGE_DIR` 下。进行中的上传使用 `TMP_DIR/*.tmp`；上传失败时会删除对应临时文件。服务只扫描 `TMP_DIR`，并在启动时和此后每小时清理早于 `TEMP_FILE_TTL` 的 `.tmp` 文件。两个目录必须配置为不同路径，以确保允许使用 `.tmp` 后缀的正式文件不会被清理。服务绝不会清理最终文件，也不会覆盖同名文件。
 
 轮换 V1 令牌时，需要替换 `/etc/upload-api/upload-api.env` 中的 `UPLOAD_TOKEN`，同步更新 Windows 客户端使用的密钥，然后重启服务。V1 不支持在过渡期间同时接受两个令牌。绝不要将真实令牌写入 Git 或命令日志。
 
@@ -170,4 +181,4 @@ curl.exe -fS -T "C:\data\project-data.zip" `
 - `429`：等待当前上传完成，或在评估风险后调整 `MAX_CONCURRENT_UPLOADS`。
 - `507`：释放磁盘空间；如需调整 `MIN_FREE_SPACE`，请先确认预留空间仍能满足运行要求。
 - Nginx 报告 TLS 错误：检查 CA 文件、服务端证书中的 SAN `IP:117.139.126.166`、文件权限和系统时间。
-- 上传中断后残留临时文件：检查 `.tmp` 的权限，再查看 `journalctl -u upload-api`；启动时和每小时执行的清理任务是兜底机制。
+- 上传中断后残留临时文件：检查 `TMP_DIR` 的权限，再查看 `journalctl -u upload-api`；启动时和每小时执行的清理任务是兜底机制。

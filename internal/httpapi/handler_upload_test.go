@@ -30,11 +30,12 @@ const testToken = "0123456789abcdef0123456789abcdef"
 func newTestServer(t *testing.T, concurrency int) (*Server, string) {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := storage.New(dir)
+	tmpDir := filepath.Join(dir, "upload-tmp")
+	store, err := storage.New(dir, tmpDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{StorageDir: dir, MaxFileSize: 1024, MaxConcurrent: concurrency, UploadToken: testToken}
+	cfg := config.Config{StorageDir: dir, TmpDir: tmpDir, MaxFileSize: 1024, MaxConcurrent: concurrency, UploadToken: testToken}
 	s := New(cfg, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.diskFree = func(string) (uint64, error) { return 1 << 40, nil }
 	return s, dir
@@ -127,12 +128,13 @@ func TestUploadSuccessAndSHA(t *testing.T) {
 
 func TestTruncatedHTTPRequestIsSizeMismatch(t *testing.T) {
 	dir := t.TempDir()
-	store, err := storage.New(dir)
+	tmpDir := filepath.Join(dir, "upload-tmp")
+	store, err := storage.New(dir, tmpDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
-	cfg := config.Config{StorageDir: dir, MaxFileSize: 1024, MaxConcurrent: 1, UploadToken: testToken}
+	cfg := config.Config{StorageDir: dir, TmpDir: tmpDir, MaxFileSize: 1024, MaxConcurrent: 1, UploadToken: testToken}
 	s := New(cfg, store, slog.New(slog.NewTextHandler(&logs, nil)))
 	s.diskFree = func(string) (uint64, error) { return 1 << 40, nil }
 	httpServer := httptest.NewServer(s.Handler())
@@ -335,12 +337,12 @@ func assertNoUploadArtifacts(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.Name() == ".tmp" {
-			err := filepath.WalkDir(filepath.Join(dir, ".tmp"), func(path string, d fs.DirEntry, err error) error {
+		if entry.Name() == "upload-tmp" {
+			err := filepath.WalkDir(filepath.Join(dir, "upload-tmp"), func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return err
 				}
-				if path != filepath.Join(dir, ".tmp") {
+				if path != filepath.Join(dir, "upload-tmp") {
 					t.Fatalf("temporary artifact remains: %s", path)
 				}
 				return nil

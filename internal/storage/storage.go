@@ -16,7 +16,7 @@ type Storage struct {
 	tmpDir string
 }
 
-func New(dir string) (*Storage, error) {
+func New(dir, tmpDir string) (*Storage, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve storage directory: %w", err)
@@ -24,14 +24,35 @@ func New(dir string) (*Storage, error) {
 	if err := os.MkdirAll(abs, 0750); err != nil {
 		return nil, fmt.Errorf("create storage directory: %w", err)
 	}
-	tmp := filepath.Join(abs, ".tmp")
-	if err := os.MkdirAll(tmp, 0750); err != nil {
+	tmpAbs, err := filepath.Abs(tmpDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve temporary directory: %w", err)
+	}
+	if err := os.MkdirAll(tmpAbs, 0750); err != nil {
 		return nil, fmt.Errorf("create temporary directory: %w", err)
 	}
-	if err := verifyPublish(abs, tmp); err != nil {
+	dirInfo, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("stat storage directory: %w", err)
+	}
+	tmpInfo, err := os.Stat(tmpAbs)
+	if err != nil {
+		return nil, fmt.Errorf("stat temporary directory: %w", err)
+	}
+	if os.SameFile(dirInfo, tmpInfo) {
+		return nil, errors.New("TMP_DIR and STORAGE_DIR must be different directories")
+	}
+	same, err := sameFilesystem(abs, tmpAbs)
+	if err != nil {
+		return nil, fmt.Errorf("compare storage filesystems: %w", err)
+	}
+	if !same {
+		return nil, errors.New("TMP_DIR and STORAGE_DIR must be on the same filesystem")
+	}
+	if err := verifyPublish(abs, tmpAbs); err != nil {
 		return nil, err
 	}
-	return &Storage{dir: abs, tmpDir: tmp}, nil
+	return &Storage{dir: abs, tmpDir: tmpAbs}, nil
 }
 
 func verifyPublish(dir, tmpDir string) error {

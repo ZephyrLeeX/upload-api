@@ -23,7 +23,7 @@ func main() {
 		logger.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
-	store, err := storage.New(cfg.StorageDir)
+	store, err := storage.New(cfg.StorageDir, cfg.TmpDir)
 	if err != nil {
 		logger.Error("initialize storage", "error", err)
 		os.Exit(1)

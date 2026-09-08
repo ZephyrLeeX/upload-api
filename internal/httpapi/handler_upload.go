@@ -96,6 +96,8 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TMP_DIR and STORAGE_DIR are validated to reside on the same filesystem,
+	// so this check covers both temporary writes and final storage.
 	available, err := s.diskFree(s.storage.Dir())
 	if err != nil {
 		s.logger.Error("check available storage failed", "request_id", id, "error", err)

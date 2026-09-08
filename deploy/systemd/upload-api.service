@@ -17,7 +17,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/data/uploads
+ReadWritePaths=/data/uploads /data/upload-tmp
 LimitNOFILE=65535
 
 [Install]

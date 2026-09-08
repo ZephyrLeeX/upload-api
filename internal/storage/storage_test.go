@@ -27,7 +27,7 @@ func TestValidateFilename(t *testing.T) {
 }
 
 func TestCommitDoesNotOverwrite(t *testing.T) {
-	s, err := New(t.TempDir())
+	s, err := New(t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,12 +58,13 @@ func TestCommitDoesNotOverwrite(t *testing.T) {
 
 func TestNewChecksPublishAndLeavesNoProbes(t *testing.T) {
 	dir := t.TempDir()
+	tmpDir := t.TempDir()
 	existingPath := filepath.Join(dir, "existing.bin")
 	if err := os.WriteFile(existingPath, []byte("unchanged"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := New(dir); err != nil {
+	if _, err := New(dir, tmpDir); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(existingPath)
@@ -73,7 +74,7 @@ func TestNewChecksPublishAndLeavesNoProbes(t *testing.T) {
 	if string(data) != "unchanged" {
 		t.Fatalf("existing file changed to %q", data)
 	}
-	for _, probeDir := range []string{dir, filepath.Join(dir, ".tmp")} {
+	for _, probeDir := range []string{dir, tmpDir} {
 		entries, err := os.ReadDir(probeDir)
 		if err != nil {
 			t.Fatal(err)
@@ -87,16 +88,22 @@ func TestNewChecksPublishAndLeavesNoProbes(t *testing.T) {
 }
 
 func TestCleanupExpiredOnlyRemovesTmpFiles(t *testing.T) {
-	s, err := New(t.TempDir())
+	dir := t.TempDir()
+	tmpDir := t.TempDir()
+	s, err := New(dir, tmpDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	oldTmp := filepath.Join(s.tmpDir, "old.tmp")
 	keep := filepath.Join(s.tmpDir, "keep.txt")
+	final := filepath.Join(dir, "final.bin")
 	if err := os.WriteFile(oldTmp, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(keep, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(final, []byte("final"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-2 * time.Hour)
@@ -111,5 +118,54 @@ func TestCleanupExpiredOnlyRemovesTmpFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(keep); err != nil {
 		t.Fatalf("non-tmp file removed: %v", err)
+	}
+	if data, err := os.ReadFile(final); err != nil || string(data) != "final" {
+		t.Fatalf("final file was modified: data=%q err=%v", data, err)
+	}
+}
+
+func TestCreateTempUsesConfiguredTmpDir(t *testing.T) {
+	s, err := New(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp, err := s.CreateTemp("request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	if filepath.Dir(path) != s.tmpDir {
+		t.Fatalf("temporary file created in %q, want %q", filepath.Dir(path), s.tmpDir)
+	}
+}
+
+func TestNewRejectsSameDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := New(dir, dir); err == nil || !strings.Contains(err.Error(), "must be different directories") {
+		t.Fatalf("New error = %v, want different-directories error", err)
+	}
+}
+
+func TestNewRejectsDifferentFilesystemsWhenAvailable(t *testing.T) {
+	storageDir := t.TempDir()
+	tmpDir, err := os.MkdirTemp("/dev/shm", "upload-api-test-")
+	if err != nil {
+		t.Skipf("cannot create a test directory on /dev/shm: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	same, err := sameFilesystem(storageDir, tmpDir)
+	if err != nil {
+		t.Skipf("cannot compare test filesystems: %v", err)
+	}
+	if same {
+		t.Skip("temporary test directories are on the same filesystem")
+	}
+	if _, err := New(storageDir, tmpDir); err == nil || !strings.Contains(err.Error(), "must be on the same filesystem") {
+		t.Fatalf("New error = %v, want same-filesystem error", err)
 	}
 }

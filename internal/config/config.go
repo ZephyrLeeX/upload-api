@@ -11,6 +11,7 @@ import (
 type Config struct {
 	ListenAddr      string
 	StorageDir      string
+	TmpDir          string
 	MaxFileSize     int64
 	MaxConcurrent   int
 	MinFreeSpace    uint64
@@ -25,6 +26,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		ListenAddr:  envOr("LISTEN_ADDR", ":10443"),
 		StorageDir:  envOr("STORAGE_DIR", "/data/uploads"),
+		TmpDir:      envOr("TMP_DIR", "/data/upload-tmp"),
 		UploadToken: os.Getenv("UPLOAD_TOKEN"),
 		TLSCertFile: envOr("TLS_CERT_FILE", "/etc/upload-api/tls/server.crt"),
 		TLSKeyFile:  envOr("TLS_KEY_FILE", "/etc/upload-api/tls/server.key"),
@@ -67,8 +69,8 @@ func (c Config) Validate() error {
 	if c.ShutdownTimeout <= 0 {
 		return errors.New("SHUTDOWN_TIMEOUT must be greater than zero")
 	}
-	if c.StorageDir == "" || c.ListenAddr == "" {
-		return errors.New("LISTEN_ADDR and STORAGE_DIR must not be empty")
+	if c.StorageDir == "" || c.TmpDir == "" || c.ListenAddr == "" {
+		return errors.New("LISTEN_ADDR, STORAGE_DIR, and TMP_DIR must not be empty")
 	}
 	if err := regularFile(c.TLSCertFile, "TLS_CERT_FILE"); err != nil {
 		return err

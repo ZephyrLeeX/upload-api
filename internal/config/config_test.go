@@ -18,7 +18,7 @@ func configEnvironment(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"LISTEN_ADDR", "STORAGE_DIR", "MAX_FILE_SIZE", "MAX_CONCURRENT_UPLOADS",
+		"LISTEN_ADDR", "STORAGE_DIR", "TMP_DIR", "MAX_FILE_SIZE", "MAX_CONCURRENT_UPLOADS",
 		"MIN_FREE_SPACE", "TEMP_FILE_TTL", "SHUTDOWN_TIMEOUT",
 	} {
 		t.Setenv(name, "")
@@ -37,8 +37,35 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MaxConcurrent != 1 {
 		t.Fatalf("MaxConcurrent = %d, want 1", cfg.MaxConcurrent)
 	}
+	if cfg.TmpDir != "/data/upload-tmp" {
+		t.Fatalf("TmpDir = %q, want /data/upload-tmp", cfg.TmpDir)
+	}
 	if cfg.ShutdownTimeout != 2*time.Hour {
 		t.Fatalf("ShutdownTimeout = %v, want 2h", cfg.ShutdownTimeout)
+	}
+}
+
+func TestLoadTmpDir(t *testing.T) {
+	configEnvironment(t)
+	t.Setenv("TMP_DIR", "/tmp/custom-upload-tmp")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TmpDir != "/tmp/custom-upload-tmp" {
+		t.Fatalf("TmpDir = %q, want /tmp/custom-upload-tmp", cfg.TmpDir)
+	}
+}
+
+func TestValidateRejectsEmptyTmpDir(t *testing.T) {
+	configEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.TmpDir = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted an empty TMP_DIR")
 	}
 }
 
