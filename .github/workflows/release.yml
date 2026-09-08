@@ -1,0 +1,70 @@
+name: 发布版本
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 构建并发布 Linux amd64
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 安装 Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: 运行测试
+        run: go test ./...
+
+      - name: 运行静态检查
+        run: go vet ./...
+
+      - name: 构建二进制文件
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          binary_name="upload-api-${GITHUB_REF_NAME}-linux-amd64"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags="-s -w" \
+            -o "dist/${binary_name}" ./cmd/upload-api
+          (
+            cd dist
+            sha256sum "${binary_name}" >"${binary_name}.sha256"
+          )
+
+      - name: 保存工作流构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: upload-api-${{ github.ref_name }}-linux-amd64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 创建或更新 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/* \
+              --verify-tag \
+              --generate-notes \
+              --title "${GITHUB_REF_NAME}"
+          fi
