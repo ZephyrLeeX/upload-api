@@ -1,18 +1,22 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +114,112 @@ func TestUploadSuccessAndSHA(t *testing.T) {
 	if !bytes.Equal(got, body) {
 		t.Fatal("stored content differs")
 	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dir, "测试.bin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotMode := info.Mode().Perm(); gotMode != 0640 {
+			t.Fatalf("stored file mode = %04o, want 0640", gotMode)
+		}
+	}
+}
+
+func TestTruncatedHTTPRequestIsSizeMismatch(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	cfg := config.Config{StorageDir: dir, MaxFileSize: 1024, MaxConcurrent: 1, UploadToken: testToken}
+	s := New(cfg, store, slog.New(slog.NewTextHandler(&logs, nil)))
+	s.diskFree = func(string) (uint64, error) { return 1 << 40, nil }
+	httpServer := httptest.NewServer(s.Handler())
+	defer httpServer.Close()
+
+	conn, err := net.Dial("tcp", httpServer.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcpConn, ok := conn.(*net.TCPConn)
+	if !ok {
+		conn.Close()
+		t.Fatal("test connection is not TCP")
+	}
+	request := "PUT /api/v1/upload/truncated.bin HTTP/1.1\r\n" +
+		"Host: " + httpServer.Listener.Addr().String() + "\r\n" +
+		"Authorization: Bearer " + testToken + "\r\n" +
+		"Content-Type: application/octet-stream\r\n" +
+		"Content-Length: 5\r\n" +
+		"Connection: close\r\n\r\nhi"
+	if _, err := io.WriteString(tcpConn, request); err != nil {
+		tcpConn.Close()
+		t.Fatal(err)
+	}
+	if err := tcpConn.CloseWrite(); err != nil {
+		tcpConn.Close()
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(tcpConn), &http.Request{Method: http.MethodPut})
+	if err != nil {
+		tcpConn.Close()
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("got %d, want %d", response.StatusCode, http.StatusUnprocessableEntity)
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != "size_mismatch" || body.Message != "received size does not match Content-Length" {
+		t.Fatalf("unexpected error response: %+v", body)
+	}
+	if got := logs.String(); !strings.Contains(got, "actual_bytes=2") || !strings.Contains(got, "error_code=size_mismatch") || strings.Contains(got, "error_code=internal_error") {
+		t.Fatalf("unexpected request log: %s", got)
+	}
+	assertNoUploadArtifacts(t, dir)
+
+	rr := httptest.NewRecorder()
+	s.upload(rr, uploadRequest(bytes.NewReader([]byte("ok")), 2, "truncated.bin"))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("subsequent upload got %d: %s", rr.Code, rr.Body)
+	}
+}
+
+func TestUploadSizeLimitBoundaries(t *testing.T) {
+	t.Run("exact maximum", func(t *testing.T) {
+		s, _ := newTestServer(t, 1)
+		body := bytes.Repeat([]byte("x"), 1024)
+		rr := httptest.NewRecorder()
+		s.upload(rr, uploadRequest(bytes.NewReader(body), 1024, "exact.bin"))
+		if rr.Code != http.StatusCreated {
+			t.Fatalf("got %d: %s", rr.Code, rr.Body)
+		}
+	})
+
+	t.Run("declared maximum plus one", func(t *testing.T) {
+		s, dir := newTestServer(t, 1)
+		rr := httptest.NewRecorder()
+		s.upload(rr, uploadRequest(bytes.NewReader([]byte("x")), 1025, "declared-large.bin"))
+		if rr.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("got %d: %s", rr.Code, rr.Body)
+		}
+		assertNoUploadArtifacts(t, dir)
+	})
+
+	t.Run("actual body exceeds maximum", func(t *testing.T) {
+		s, dir := newTestServer(t, 1)
+		body := bytes.Repeat([]byte("x"), 1025)
+		rr := httptest.NewRecorder()
+		s.upload(rr, uploadRequest(bytes.NewReader(body), 1024, "actual-large.bin"))
+		if rr.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("got %d: %s", rr.Code, rr.Body)
+		}
+		assertNoUploadArtifacts(t, dir)
+	})
 }
 
 func TestUploadFailuresLeaveNoFiles(t *testing.T) {
@@ -158,6 +268,37 @@ func TestCanceledUploadCleansTemporaryFile(t *testing.T) {
 	req.SetPathValue("filename", "cancel.bin")
 	rr := httptest.NewRecorder()
 	s.upload(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body)
+	}
+	var response errorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error != "upload_canceled" {
+		t.Fatalf("error = %q, want upload_canceled", response.Error)
+	}
+	assertNoUploadArtifacts(t, dir)
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("test read failure") }
+
+func TestUploadIOErrorRemainsInternalError(t *testing.T) {
+	s, dir := newTestServer(t, 1)
+	rr := httptest.NewRecorder()
+	s.upload(rr, uploadRequest(failingReader{}, 1, "io-error.bin"))
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body)
+	}
+	var response errorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error != "internal_error" || response.Message != "internal server error" {
+		t.Fatalf("unexpected error response: %+v", response)
+	}
 	assertNoUploadArtifacts(t, dir)
 }
 

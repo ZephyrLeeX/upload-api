@@ -28,19 +28,59 @@ func New(dir string) (*Storage, error) {
 	if err := os.MkdirAll(tmp, 0750); err != nil {
 		return nil, fmt.Errorf("create temporary directory: %w", err)
 	}
-	probe, err := os.CreateTemp(tmp, ".write-test-*")
-	if err != nil {
-		return nil, fmt.Errorf("storage directory is not writable: %w", err)
-	}
-	probeName := probe.Name()
-	if err := probe.Close(); err != nil {
-		_ = os.Remove(probeName)
-		return nil, fmt.Errorf("close storage probe: %w", err)
-	}
-	if err := os.Remove(probeName); err != nil {
-		return nil, fmt.Errorf("remove storage probe: %w", err)
+	if err := verifyPublish(abs, tmp); err != nil {
+		return nil, err
 	}
 	return &Storage{dir: abs, tmpDir: tmp}, nil
+}
+
+func verifyPublish(dir, tmpDir string) error {
+	tmpProbe, err := os.CreateTemp(tmpDir, ".publish-test-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create storage probe: %w", err)
+	}
+	tmpPath := tmpProbe.Name()
+	finalPath := ""
+	defer func() {
+		_ = tmpProbe.Close()
+		if finalPath != "" {
+			_ = os.Remove(finalPath)
+		}
+		if tmpPath != "" {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpProbe.Write([]byte("probe")); err != nil {
+		return fmt.Errorf("write storage probe: %w", err)
+	}
+	if err := tmpProbe.Close(); err != nil {
+		return fmt.Errorf("close storage probe: %w", err)
+	}
+
+	finalProbe, err := os.CreateTemp(dir, ".publish-test-*")
+	if err != nil {
+		return fmt.Errorf("create final storage probe name: %w", err)
+	}
+	finalPath = finalProbe.Name()
+	if err := finalProbe.Close(); err != nil {
+		return fmt.Errorf("close final storage probe: %w", err)
+	}
+	if err := os.Remove(finalPath); err != nil {
+		return fmt.Errorf("prepare final storage probe: %w", err)
+	}
+	if err := os.Link(tmpPath, finalPath); err != nil {
+		return fmt.Errorf("storage directory cannot publish files: %w", err)
+	}
+	if err := os.Remove(finalPath); err != nil {
+		return fmt.Errorf("remove final storage probe: %w", err)
+	}
+	finalPath = ""
+	if err := os.Remove(tmpPath); err != nil {
+		return fmt.Errorf("remove temporary storage probe: %w", err)
+	}
+	tmpPath = ""
+	return nil
 }
 
 func ValidateFilename(name string) error {

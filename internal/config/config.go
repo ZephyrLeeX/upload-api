@@ -9,15 +9,16 @@ import (
 )
 
 type Config struct {
-	ListenAddr    string
-	StorageDir    string
-	MaxFileSize   int64
-	MaxConcurrent int
-	MinFreeSpace  uint64
-	TempFileTTL   time.Duration
-	UploadToken   string
-	TLSCertFile   string
-	TLSKeyFile    string
+	ListenAddr      string
+	StorageDir      string
+	MaxFileSize     int64
+	MaxConcurrent   int
+	MinFreeSpace    uint64
+	TempFileTTL     time.Duration
+	ShutdownTimeout time.Duration
+	UploadToken     string
+	TLSCertFile     string
+	TLSKeyFile      string
 }
 
 func Load() (Config, error) {
@@ -32,13 +33,16 @@ func Load() (Config, error) {
 	if cfg.MaxFileSize, err = int64Env("MAX_FILE_SIZE", 20*1024*1024*1024); err != nil {
 		return Config{}, err
 	}
-	if cfg.MaxConcurrent, err = intEnv("MAX_CONCURRENT_UPLOADS", 2); err != nil {
+	if cfg.MaxConcurrent, err = intEnv("MAX_CONCURRENT_UPLOADS", 1); err != nil {
 		return Config{}, err
 	}
 	if cfg.MinFreeSpace, err = uint64Env("MIN_FREE_SPACE", 1024*1024*1024); err != nil {
 		return Config{}, err
 	}
 	if cfg.TempFileTTL, err = durationEnv("TEMP_FILE_TTL", 24*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.ShutdownTimeout, err = durationEnv("SHUTDOWN_TIMEOUT", 2*time.Hour); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -59,6 +63,9 @@ func (c Config) Validate() error {
 	}
 	if c.TempFileTTL <= 0 {
 		return errors.New("TEMP_FILE_TTL must be greater than zero")
+	}
+	if c.ShutdownTimeout <= 0 {
+		return errors.New("SHUTDOWN_TIMEOUT must be greater than zero")
 	}
 	if c.StorageDir == "" || c.ListenAddr == "" {
 		return errors.New("LISTEN_ADDR and STORAGE_DIR must not be empty")

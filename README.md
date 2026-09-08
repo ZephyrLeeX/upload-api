@@ -41,14 +41,15 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 mise exec -- \
 | `LISTEN_ADDR` | `:10443` | HTTPS listen address |
 | `STORAGE_DIR` | `/data/uploads` | Final file directory |
 | `MAX_FILE_SIZE` | `21474836480` | Maximum bytes (20 GiB) |
-| `MAX_CONCURRENT_UPLOADS` | `2` | Immediate upload slots |
+| `MAX_CONCURRENT_UPLOADS` | `1` | Immediate upload slots; administrators may explicitly configure more |
 | `MIN_FREE_SPACE` | `1073741824` | Bytes that must remain free |
 | `TEMP_FILE_TTL` | `24h` | Abandoned `.tmp` lifetime |
+| `SHUTDOWN_TIMEOUT` | `2h` | Graceful shutdown wait for active uploads (Go duration) |
 | `UPLOAD_TOKEN` | required | Secret of at least 32 characters |
 | `TLS_CERT_FILE` | `/etc/upload-api/tls/server.crt` | Server certificate |
 | `TLS_KEY_FILE` | `/etc/upload-api/tls/server.key` | Server private key |
 
-All values and both TLS files are validated at startup. The storage directory and its `.tmp` child are created and checked for write access. Unknown-length/chunked request bodies are rejected.
+All values and both TLS files are validated at startup. The storage directory and its `.tmp` child are created and checked for temporary-file and hard-link publication access. Unknown-length/chunked request bodies are rejected.
 
 ## TLS preparation
 

@@ -136,6 +136,8 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			fail(http.StatusRequestEntityTooLarge, "file_too_large", "file exceeds the configured size limit")
+		} else if errors.Is(err, io.ErrUnexpectedEOF) {
+			fail(http.StatusUnprocessableEntity, "size_mismatch", "received size does not match Content-Length")
 		} else if r.Context().Err() != nil {
 			s.logger.Warn("upload canceled", "request_id", id, "error", r.Context().Err())
 			fail(http.StatusBadRequest, "upload_canceled", "upload was canceled")
@@ -156,6 +158,16 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := tmp.Sync(); err != nil {
 		s.logger.Error("sync temporary file failed", "request_id", id, "error", err)
+		fail(http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	if err := tmp.Chmod(0640); err != nil {
+		s.logger.Error("set uploaded file permissions failed", "request_id", id, "error", err)
+		fail(http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	if err := tmp.Sync(); err != nil {
+		s.logger.Error("sync uploaded file permissions failed", "request_id", id, "error", err)
 		fail(http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}

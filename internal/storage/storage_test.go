@@ -56,6 +56,36 @@ func TestCommitDoesNotOverwrite(t *testing.T) {
 	}
 }
 
+func TestNewChecksPublishAndLeavesNoProbes(t *testing.T) {
+	dir := t.TempDir()
+	existingPath := filepath.Join(dir, "existing.bin")
+	if err := os.WriteFile(existingPath, []byte("unchanged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := New(dir); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(existingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "unchanged" {
+		t.Fatalf("existing file changed to %q", data)
+	}
+	for _, probeDir := range []string{dir, filepath.Join(dir, ".tmp")} {
+		entries, err := os.ReadDir(probeDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".publish-test-") {
+				t.Fatalf("probe remains in %s: %s", probeDir, entry.Name())
+			}
+		}
+	}
+}
+
 func TestCleanupExpiredOnlyRemovesTmpFiles(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {

@@ -11,6 +11,7 @@ EnvironmentFile=/etc/upload-api/upload-api.env
 ExecStart=/usr/local/bin/upload-api
 Restart=on-failure
 RestartSec=3s
+TimeoutStopSec=2h10min
 WorkingDirectory=/var/lib/upload-api
 NoNewPrivileges=true
 PrivateTmp=true
