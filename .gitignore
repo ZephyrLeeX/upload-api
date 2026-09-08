@@ -1,0 +1,7 @@
+/build/
+/certs/
+*.key
+*.crt
+*.csr
+.env
+*.tmp

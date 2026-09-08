@@ -1,0 +1,23 @@
+[Unit]
+Description=HTTP Upload API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=upload
+Group=upload
+EnvironmentFile=/etc/upload-api/upload-api.env
+ExecStart=/usr/local/bin/upload-api
+Restart=on-failure
+RestartSec=3s
+WorkingDirectory=/var/lib/upload-api
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/uploads
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
