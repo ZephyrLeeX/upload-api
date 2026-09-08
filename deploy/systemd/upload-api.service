@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=upload
 Group=upload
+SupplementaryGroups=filetransfer
 EnvironmentFile=/etc/upload-api/upload-api.env
 ExecStart=/usr/local/bin/upload-api
 Restart=on-failure
@@ -17,7 +18,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/data/uploads /data/upload-tmp
+ReadWritePaths=/data/files /data/upload-tmp
 LimitNOFILE=65535
 
 [Install]

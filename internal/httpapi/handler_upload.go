@@ -163,7 +163,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
-	if err := tmp.Chmod(0640); err != nil {
+	if err := tmp.Chmod(0660); err != nil {
 		s.logger.Error("set uploaded file permissions failed", "request_id", id, "error", err)
 		fail(http.StatusInternalServerError, "internal_error", "internal server error")
 		return

@@ -10,7 +10,7 @@ Windows curl
   -> 内部 Nginx :1080（流式反向代理）
   -> HTTPS 117.139.126.166:10443
   -> Go 文件上传 API
-  -> /data/upload-tmp/<request-id>-*.tmp -> /data/uploads/<filename>
+  -> /data/upload-tmp/<request-id>-*.tmp -> /data/files/<filename>
 ```
 
 Windows 到 Nginx 之间使用 HTTP。Nginx 在 HTTPS 链路上使用私有 CA 验证文件上传 API 的证书。API 始终使用固定的 Bearer 令牌进行身份认证。
@@ -102,24 +102,56 @@ curl --cacert ./certs/upload-ca.crt -fS -T /tmp/hello.txt \
 
 ## 生产环境部署
 
-创建专用账户和目录：
+创建共享组、专用账户和目录。如果 `filetransfer` 组已经存在，请跳过 `groupadd`；如果 `vftp` 用户已经存在，直接将其加入该组：
 
 ```bash
-useradd --system --home /var/lib/upload-api --shell /usr/sbin/nologin upload
-mkdir -p /var/lib/upload-api /data/uploads /data/upload-tmp /etc/upload-api/tls
-chown -R upload:upload /var/lib/upload-api /data/uploads /data/upload-tmp
+groupadd --system filetransfer
+useradd --system \
+  --home /var/lib/upload-api \
+  --shell /usr/sbin/nologin \
+  upload
+usermod -aG filetransfer upload
+usermod -aG filetransfer vftp
+
+mkdir -p /var/lib/upload-api
+mkdir -p /data/files
+mkdir -p /data/upload-tmp
+mkdir -p /etc/upload-api/tls
+
+chown -R upload:upload /var/lib/upload-api
+chown -R upload:filetransfer /data/files
+chown -R upload:filetransfer /data/upload-tmp
 chown root:upload /etc/upload-api /etc/upload-api/tls
-chmod 750 /etc/upload-api /etc/upload-api/tls /data/uploads /data/upload-tmp
+chmod 750 /etc/upload-api /etc/upload-api/tls
+chmod 2770 /data/files
+chmod 2770 /data/upload-tmp
 ```
 
-`STORAGE_DIR=/data/uploads` 保存最终完成文件，`TMP_DIR=/data/upload-tmp` 保存上传中的临时文件。两者必须是同一个文件系统上的不同目录。例如以下命令显示的设备号应相同：
+目录权限中的 `2xxx` 是 setgid 位，确保在这些目录中新建的文件和子目录继承 `filetransfer` 组。最终发布使用临时文件的硬链接，因此最终路径保持同一个 inode 及其 `filetransfer` 属组。应用不需要以 root 身份运行，也不需要在代码中执行 `chown`。
+
+`STORAGE_DIR=/data/files` 保存最终完成文件，`TMP_DIR=/data/upload-tmp` 保存上传中的临时文件。两者必须是同一个文件系统上的不同目录。例如以下命令显示的设备号应相同：
 
 ```bash
-df -T /data/uploads /data/upload-tmp
-stat -c '%d %n' /data/uploads /data/upload-tmp
+df -T /data/files /data/upload-tmp
+stat -c '%d %n' /data/files /data/upload-tmp
 ```
 
-`/data/uploads` 与 `/data/upload-tmp` 在同一文件系统上是正确配置；如果 `/data/uploads` 与 `/mnt/other-disk/upload-tmp` 属于不同文件系统，则是错误配置，服务将拒绝启动。
+`/data/files` 与 `/data/upload-tmp` 在同一文件系统上是正确配置；如果 `/data/files` 与 `/mnt/other-disk/upload-tmp` 属于不同文件系统，则是错误配置，服务将拒绝启动。
+
+启动服务前可验证用户组与目录权限：
+
+```bash
+id upload
+id vftp
+stat -c '%A %a %U %G %n' /data/files /data/upload-tmp
+```
+
+两个用户的输出都应包含 `filetransfer`。目录输出应类似：
+
+```text
+drwxrws--- 2770 upload filetransfer /data/files
+drwxrws--- 2770 upload filetransfer /data/upload-tmp
+```
 
 将二进制文件复制到 `/usr/local/bin/upload-api`，将示例环境变量文件复制到 `/etc/upload-api/upload-api.env`，将 TLS 文件复制到 `/etc/upload-api/tls`，并将 systemd 单元文件复制到 `/etc/systemd/system/upload-api.service`。环境变量文件的所有者和权限应设置为 `root:upload`、`0640`；私钥也应设置为 `root:upload`、`0640`。然后执行：
 
@@ -128,6 +160,18 @@ systemctl daemon-reload
 systemctl enable --now upload-api
 systemctl status upload-api
 journalctl -u upload-api -f
+```
+
+上传一个测试文件后，验证最终文件的权限与属组：
+
+```bash
+stat -c '%A %a %U %G %n' /data/files/test.bin
+```
+
+预期输出：
+
+```text
+-rw-rw---- 660 upload filetransfer /data/files/test.bin
 ```
 
 将 CA 证书复制到 `/etc/nginx/certs/upload-ca.crt` 后，在内部代理上安装 `deploy/nginx/internal-upload.conf`。移除旧的 WebDAV 存储配置，运行 `nginx -t`，然后重新加载 Nginx。提供的配置会禁用请求缓冲，并将路由限制为健康检查和文件上传接口。

@@ -120,8 +120,8 @@ func TestUploadSuccessAndSHA(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if gotMode := info.Mode().Perm(); gotMode != 0640 {
-			t.Fatalf("stored file mode = %04o, want 0640", gotMode)
+		if gotMode := info.Mode().Perm(); gotMode != 0660 {
+			t.Fatalf("stored file mode = %04o, want 0660", gotMode)
 		}
 	}
 }
